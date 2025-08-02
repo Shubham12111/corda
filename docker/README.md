@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Building docker images
 
 There are 3 Gradle tasks dedicated to this:
@@ -35,3 +36,6 @@ gradlew docker:pushDockerImage -Pdocker.image.repository=MyOwnRepository/test --
 ```
 
 
+=======
+# corda
+>>>>>>> b648ab86e5d486170d54c7c95c650a89fa1533bb
