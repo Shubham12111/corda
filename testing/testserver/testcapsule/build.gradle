@@ -1,0 +1,77 @@
+/**
+ * This build.gradle exists to publish our capsule (executable fat jar) to maven. It cannot be placed in the
+ * webserver project because the bintray plugin cannot publish two modules from one project.
+ */
+apply plugin: 'us.kirchmeier.capsule'
+apply plugin: 'corda.common-publishing'
+
+description 'Corda node web server capsule'
+
+configurations {
+    runtimeArtifacts
+    capsuleRuntime
+}
+
+dependencies {
+    // TypeSafe Config: for simple and human friendly config files.
+    capsuleRuntime "com.typesafe:config:$typesafe_config_version"
+}
+
+jar {
+    enabled = true
+    classifier 'ignore'
+}
+
+capsule {
+    version capsule_version
+}
+
+configurations.runtimeOnly.canBeResolved = true
+tasks.register('buildWebserverJar', FatCapsule) {
+    dependsOn project(':node').tasks.jar
+    applicationClass 'net.corda.webserver.WebServer'
+    archiveBaseName = 'corda-testserver'
+    archiveVersion = corda_release_version
+    archiveName = archiveFileName.get()
+    applicationSource = files(
+            project(':testing:testserver').configurations.runtimeClasspath,
+            project(':testing:testserver').tasks.jar,
+            project(':testing:testserver').sourceSets.main.java.outputDir.toString() + '/CordaWebserverCaplet.class',
+            project(':testing:testserver').sourceSets.main.java.outputDir.toString() + '/CordaWebserverCaplet$1.class',
+            project(':node').buildDir.toString() + '/resources/main/corda-reference.conf',
+            "$rootDir/config/dev/log4j2.xml",
+            project(':node:capsule').projectDir.toString() + '/NOTICE' // Copy CDDL notice
+    )
+    from configurations.capsuleRuntime.files.collect { zipTree(it) }
+
+    capsuleManifest {
+        applicationVersion = corda_release_version
+        javaAgents = quasar_classifier ? ["quasar-core-${quasar_version}-${quasar_classifier}.jar=m"] : ["quasar-core-${quasar_version}.jar=m"]
+        systemProperties['visualvm.display.name'] = 'Corda Webserver'
+        minJavaVersion = '17.0'
+        caplets = ['CordaWebserverCaplet']
+
+        // JVM configuration:
+        // - Constrain to small heap sizes to ease development on low end devices.
+        // - Switch to the G1 GC which is going to be the default in Java 9 and gives low pause times/string dedup.
+        //
+        // If you change these flags, please also update Driver.kt
+        jvmArgs = ['-Xmx200m']
+    }
+}
+
+artifacts {
+    runtimeArtifacts buildWebserverJar
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId 'corda-testserver'
+            artifact(buildWebserverJar) {
+                classifier ''
+            }
+            from components.java
+        }
+    }
+}

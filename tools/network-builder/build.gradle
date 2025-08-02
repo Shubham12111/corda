@@ -1,0 +1,103 @@
+// JDK 11 JavaFX
+plugins {
+    id 'org.openjfx.javafxplugin' version '0.0.7' apply false
+    id 'corda.common-publishing'
+}
+
+description 'Corda Network Builder module'
+
+apply plugin: 'org.openjfx.javafxplugin'
+
+javafx {
+    version = "11.0.2"
+    modules = [
+        'javafx.controls',
+        'javafx.fxml',
+        'javafx.swing'
+    ]
+}
+
+ext {
+    tornadofx_version = '1.7.15'
+}
+
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'idea'
+apply plugin: 'application'
+// We need to set mainClassName before applying the shadow plugin.
+mainClassName = 'net.corda.networkbuilder.Main'
+
+apply plugin: 'com.github.johnrengelman.shadow'
+
+configurations {
+    implementation {
+        exclude group: "log4j", module: "log4j"
+        exclude group: "org.apache.logging.log4j"
+    }
+}
+
+dependencies {
+    implementation project(':core')
+    implementation project(':node')
+    implementation project(':node-api')
+    implementation project(':serialization')
+    implementation project(':common-configuration-parsing')
+    implementation project(':common-validation')
+
+    implementation "com.azure.resourcemanager:azure-resourcemanager:$azure_resource_manager_version"
+    implementation "com.azure:azure-identity:$azure_identity_version"
+
+    implementation "com.github.docker-java:docker-java:$docker_java_version"
+
+    testImplementation "org.jetbrains.kotlin:kotlin-test"
+    testImplementation "org.jetbrains.kotlin:kotlin-test-junit"
+
+
+    implementation "com.typesafe:config:$typesafe_config_version"
+    implementation "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:$jackson_version"
+    implementation "com.fasterxml.jackson.core:jackson-databind:$jackson_version"
+    implementation "com.fasterxml.jackson.module:jackson-module-kotlin:$jackson_kotlin_version"
+    implementation "info.picocli:picocli:$picocli_version"
+
+    // TornadoFX: A lightweight Kotlin framework for working with JavaFX UI's.
+    implementation "no.tornado:tornadofx:$tornadofx_version"
+
+    // ControlsFX: Extra controls for JavaFX.
+    implementation "org.controlsfx:controlsfx:$controlsfx_version"
+
+    implementation("org.apache.activemq:artemis-core-client:${artemis_version}") {
+        exclude group: 'org.jgroups', module: 'jgroups'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // Resolves a Gradle warning about not scanning for pre-processors.
+    options.compilerArgs << '-proc:none'
+}
+
+processResources {
+    from file("$rootDir/config/dev/log4j2.xml")
+}
+
+shadowJar {
+    archiveBaseName = 'network-builder'
+    archiveVersion = null
+    zip64 true
+}
+
+tasks.register('buildNetworkBuilder') {
+    dependsOn shadowJar
+}
+
+jar {
+    enabled = true
+}
+
+publishing {
+    publications {
+        shadow(MavenPublication) { publication ->
+            artifactId 'corda-tools-network-builder'
+            project.shadow.component(publication)
+        }
+    }
+}

@@ -1,0 +1,628 @@
+#!groovy
+/**
+ * Jenkins pipeline to build Corda OS release branches and tags.
+ * PLEASE NOTE: we DO want to run a build for each commit!!!
+ */
+@Library('corda-shared-build-pipeline-steps@5.3') _
+
+import com.r3.build.utils.GitUtils
+import com.r3.build.enums.SnykOrganisation
+import com.r3.build.utils.SnykUtils
+import com.r3.build.agents.KubernetesAgent
+import com.r3.build.enums.KubernetesCluster
+import com.r3.build.enums.BuildEnvironment
+import com.r3.build.enums.BuildOperatingSystem
+
+GitUtils gitUtils = new GitUtils(this)
+SnykUtils snykUtils = new SnykUtils(this)
+/**
+ * Sense environment
+ */
+boolean isReleaseBranch = (env.BRANCH_NAME =~ /^release\/os\/.*/)
+boolean isReleaseTag = (env.TAG_NAME =~ /^release-.*(?<!_JDK11)$/)
+boolean isInternalRelease = (env.TAG_NAME =~ /^internal-release-.*$/)
+boolean isReleaseCandidate = (env.TAG_NAME =~ /^(release-.*(RC|HC).*(?<!_JDK11))$/)
+def buildEdition = (isReleaseTag || isReleaseCandidate) ? "Corda Community Edition" : "Corda Open Source"
+
+KubernetesAgent k8s = new KubernetesAgent(
+    BuildEnvironment.AMD64_LINUX_JAVA17_CORDA4,
+    KubernetesCluster.JenkinsAgents,
+    1
+).withDocker(
+    1,
+    false,
+    true
+)
+
+/**
+ * Common Gradle arguments for all Gradle executions
+ */
+String COMMON_GRADLE_PARAMS = [
+        '--no-daemon',
+        '--stacktrace',
+        '--info',
+        '-Pcompilation.warningsAsErrors=false',
+        '-Ptests.failFast=true',
+        '--build-cache',
+        '-DexcludeShell'
+].join(' ')
+
+pipeline {
+    agent {
+        kubernetes {
+            cloud k8s.buildCluster.cloudName
+            yaml k8s.JSON
+            yamlMergeStrategy merge() // important to keep tolerations from the inherited template
+            idleMinutes 15
+            podRetention always()
+            nodeSelector k8s.nodeSelector
+            label k8s.jenkinsLabel
+            showRawYaml true
+            defaultContainer k8s.defaultContainer.name
+        }
+    }
+
+    /*
+     * List options in alphabetical order
+     */
+    options {
+        buildDiscarder(logRotator(daysToKeepStr: '14', artifactDaysToKeepStr: '14'))
+        parallelsAlwaysFailFast()
+        timeout(time: 6, unit: 'HOURS')
+        timestamps()
+    }
+
+    parameters {
+        booleanParam defaultValue: true, description: 'Run tests during this build?', name: 'DO_TEST'
+    }
+
+    /*
+     * List environment variables in alphabetical order
+     */
+    environment {
+        ARTIFACTORY_BUILD_NAME = "Corda :: Publish :: Publish Release to Artifactory :: ${env.BRANCH_NAME}"
+        ARTIFACTORY_CREDENTIALS = credentials('artifactory-credentials')
+        BUILD_CACHE_CREDENTIALS = credentials('gradle-ent-cache-credentials')
+        BUILD_CACHE_PASSWORD = "${env.BUILD_CACHE_CREDENTIALS_PSW}"
+        BUILD_CACHE_USERNAME = "${env.BUILD_CACHE_CREDENTIALS_USR}"
+        CORDA_ARTIFACTORY_PASSWORD = "${env.ARTIFACTORY_CREDENTIALS_PSW}"
+        CORDA_ARTIFACTORY_USERNAME = "${env.ARTIFACTORY_CREDENTIALS_USR}"
+        CORDA_GRADLE_SCAN_KEY = credentials('gradle-build-scans-key')
+        CORDA_BUILD_EDITION = "${buildEdition}"
+        CORDA_USE_CACHE = "corda-remotes"
+        DOCKER_URL = "https://index.docker.io/v1/"
+        EMAIL_RECIPIENTS = credentials('corda4-email-recipient')
+        INTEGRATION_ID = credentials('snyk-artifactory-c4')
+        SNYK_API_KEY = "c4-os-snyk" //Jenkins credential type: Snyk Api token
+        SNYK_TOKEN = credentials('c4-os-snyk-api-token-secret') //Jenkins credential type: Secret text
+        C4_OS_SNYK_ORG_ID = credentials('corda4-os-snyk-org-id')
+        GRADLE_USER_HOME = "/host_tmp/gradle"
+        JAVA_8_HOME = "/usr/lib/jvm/zulu8"
+    }
+
+    stages {
+        stage('Compile') {
+            steps {
+                authenticateGradleWrapper()
+                sh script: [
+                        './gradlew',
+                        COMMON_GRADLE_PARAMS,
+                        'clean',
+                        'jar',
+                        '--parallel'
+                ].join(' ')
+            }
+        }
+
+        stage('Stash') {
+            when {
+                expression { params.DO_TEST }
+            }
+            steps {
+                stash name: 'compiled', useDefaultExcludes: false
+            }
+        }
+
+        stage('Snyk Security') {
+            when {
+                expression { isReleaseTag || isReleaseCandidate || isReleaseBranch }
+            }
+            steps {
+                script {
+                    // Invoke Snyk for each Gradle sub project we wish to scan
+                    def modulesToScan = ['node', 'capsule']
+                    modulesToScan.each { module ->
+                        snykSecurityScan("${env.SNYK_API_KEY}", "--sub-project=$module --configuration-matching='^runtimeClasspath\$' --prune-repeated-subdependencies --debug --target-reference='${env.BRANCH_NAME}' --project-tags=Branch='${env.BRANCH_NAME.replaceAll("[^0-9|a-z|A-Z]+","_")}'")
+                    }
+                }
+            }
+        }
+
+        stage('Generate Snyk License Report') {
+            when {
+                expression { isReleaseTag || isReleaseCandidate || isReleaseBranch }
+            }
+            steps {
+                snykLicenseGeneration(env.SNYK_TOKEN, env.C4_OS_SNYK_ORG_ID)
+            }
+            post {
+                always {
+                    script {
+                        archiveArtifacts artifacts: 'snyk-license-report/*-snyk-license-report.html', allowEmptyArchive: true, fingerprint: true
+                    }
+                }
+            }
+        }
+
+        stage('All Tests') {
+            when {
+                expression { params.DO_TEST }
+                beforeAgent true
+            }
+            parallel {
+                stage('Another agent') {
+                    agent {
+                        kubernetes {
+                            cloud k8s.buildCluster.cloudName
+                            yaml k8s.JSON
+                            yamlMergeStrategy merge() // important to keep tolerations from the inherited template
+                            idleMinutes 15
+                            podRetention always()
+                            nodeSelector k8s.nodeSelector
+                            label k8s.jenkinsLabel
+                            showRawYaml true
+                            defaultContainer k8s.defaultContainer.name
+                        }
+                    }
+                    options {
+                        skipDefaultCheckout true
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: '**/*.log', allowEmptyArchive: true, fingerprint: false
+                            junit testResults: '**/build/test-results/**/*.xml', keepLongStdio: true, allowEmptyResults: true
+                            /*
+                             * Copy all JUnit results files into a single top level directory.
+                             * This is necessary to stop the allure plugin from hitting out
+                             * of memory errors due to being passed many directories with
+                             * long paths.
+                             *
+                             * File names are pre-pended with a prefix when
+                             * copied to avoid collisions between files where the same test
+                             * classes have run on multiple agents.
+                             */
+                            fileOperations([fileCopyOperation(
+                                    includes: '**/build/test-results/**/*.xml',
+                                    targetLocation: 'allure-input',
+                                    flattenFiles: true,
+                                    renameFiles: true,
+                                    sourceCaptureExpression: '.*/([^/]+)$',
+                                    targetNameExpression: 'other-agent-$1')])
+                            stash name: 'allure-input', includes: 'allure-input/**', useDefaultExcludes: false
+                        }
+                        cleanup {
+                            deleteDir() /* clean up our workspace */
+                        }
+                    }
+                    stages {
+                        stage('Unstash') {
+                            steps {
+                                unstash 'compiled'
+                            }
+                        }
+                        stage('Recompile') {
+                            steps {
+                                authenticateGradleWrapper()
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'jar',
+                                        '--parallel'
+                                ].join(' ')
+                            }
+                        }
+                        stage('Unit Test') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'test'
+                                ].join(' ')
+                            }
+                        }
+                    }
+                }
+                stage('Same agent') {
+                    post {
+                        always {
+                            archiveArtifacts artifacts: '**/*.log', allowEmptyArchive: true, fingerprint: false
+                            junit testResults: '**/build/test-results/**/*.xml', keepLongStdio: true, allowEmptyResults: true
+                            /*
+                             * Copy all JUnit results files into a single top level directory.
+                             * This is necessary to stop the allure plugin from hitting out
+                             * of memory errors due to being passed many directories with
+                             * long paths.
+                             *
+                             * File names are pre-pended with a prefix when
+                             * copied to avoid collisions between files where the same test
+                             * classes have run on multiple agents.
+                             */
+                            fileOperations([fileCopyOperation(
+                                    includes: '**/build/test-results/**/*.xml',
+                                    targetLocation: 'allure-input',
+                                    flattenFiles: true,
+                                    renameFiles: true,
+                                    sourceCaptureExpression: '.*/([^/]+)$',
+                                    targetNameExpression: 'same-agent-$1')])
+                        }
+                    }
+                    stages {
+                        stage('Integration Test') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'integrationTest'
+                                ].join(' ')
+                            }
+                        }
+
+                        stage('Deploy Node') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'deployNode'
+                                ].join(' ')
+                            }
+                        }
+                    }
+                }
+                stage('Another agent for Integration Test 1') {
+                    agent {
+                        kubernetes {
+                            cloud k8s.buildCluster.cloudName
+                            yaml k8s.JSON
+                            yamlMergeStrategy merge() // important to keep tolerations from the inherited template
+                            idleMinutes 15
+                            podRetention always()
+                            nodeSelector k8s.nodeSelector
+                            label k8s.jenkinsLabel
+                            showRawYaml true
+                            defaultContainer k8s.defaultContainer.name
+                        }
+                    }
+                    options {
+                        skipDefaultCheckout true
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: '**/*.log', allowEmptyArchive: true, fingerprint: false
+                            junit testResults: '**/build/test-results/**/*.xml', keepLongStdio: false,allowEmptyResults: true
+                        }
+                        cleanup {
+                            deleteDir() /* clean up our workspace */
+                        }
+                    }
+                    stages {
+                        stage('Unstash') {
+                            steps {
+                                unstash 'compiled'
+                            }
+                        }
+                        stage('Recompile') {
+                            steps {
+                                authenticateGradleWrapper()
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'jar',
+                                        '--parallel'
+                                ].join(' ')
+                            }
+                        }
+                        stage('Integration Test 1') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'integrationTest1'
+                                ].join(' ')
+                            }
+                        }
+                    }
+                }
+                stage('Another agent for Integration Test 2') {
+                    agent {
+                        kubernetes {
+                            cloud k8s.buildCluster.cloudName
+                            yaml k8s.JSON
+                            yamlMergeStrategy merge() // important to keep tolerations from the inherited template
+                            idleMinutes 15
+                            podRetention always()
+                            nodeSelector k8s.nodeSelector
+                            label k8s.jenkinsLabel
+                            showRawYaml true
+                            defaultContainer k8s.defaultContainer.name
+                        }
+                    }
+                    options {
+                        skipDefaultCheckout true
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: '**/*.log', allowEmptyArchive: true, fingerprint: false
+                            junit testResults: '**/build/test-results/**/*.xml', keepLongStdio: false,allowEmptyResults: true
+                        }
+                        cleanup {
+                            deleteDir() /* clean up our workspace */
+                        }
+                    }
+                    stages {
+                        stage('Unstash') {
+                            steps {
+                                unstash 'compiled'
+                            }
+                        }
+                        stage('Recompile') {
+                            steps {
+                            authenticateGradleWrapper()
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'jar',
+                                        '--parallel'
+                                ].join(' ')
+                            }
+                        }
+                        stage('Integration Test 2') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'integrationTest2'
+                                ].join(' ')
+                            }
+                        }
+                        stage('Smoke Test') {
+                            steps {
+                                sh script: [
+                                        './gradlew',
+                                        COMMON_GRADLE_PARAMS,
+                                        'smokeTest'
+                                ].join(' ')
+                            }
+                        }
+                    }
+                }
+                stage('Another agent for Slow Integration Tests') {
+                    agent {
+                        kubernetes {
+                            cloud k8s.buildCluster.cloudName
+                            yaml k8s.JSON
+                            yamlMergeStrategy merge() // important to keep tolerations from the inherited template
+                            idleMinutes 15
+                            podRetention always()
+                            nodeSelector k8s.nodeSelector
+                            label k8s.jenkinsLabel
+                            showRawYaml true
+                            defaultContainer k8s.defaultContainer.name
+                        }
+                    }
+                    options {
+                        skipDefaultCheckout true
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: '**/*.log', allowEmptyArchive: true, fingerprint: false
+                            junit testResults: '**/build/test-results/**/*.xml', keepLongStdio: false,allowEmptyResults: true
+                        }
+                        cleanup {
+                            deleteDir() /* clean up our workspace */
+                        }
+                    }
+                    stages {
+                        stage('Unstash') {
+                            steps {
+                                unstash 'compiled'
+                            }
+                        }
+                        stage('Recompile') {
+                            steps {
+                                authenticateGradleWrapper()
+                                sh script: [
+                                    './gradlew',
+                                    COMMON_GRADLE_PARAMS,
+                                    'jar',
+                                    '--parallel'
+                                ].join(' ')
+                            }
+                        }
+                        stage('Slow Integration Test') {
+                            steps {
+                                sh script: [
+                                    './gradlew',
+                                    COMMON_GRADLE_PARAMS,
+                                    'slowIntegrationTest'
+                                ].join(' ')
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Publish to Artifactory') {
+            when {
+                expression { isReleaseTag }
+            }
+            steps {
+                rtServer(
+                        id: 'R3-Artifactory',
+                        url: 'https://software.r3.com/artifactory',
+                        credentialsId: 'artifactory-credentials'
+                )
+                rtGradleDeployer(
+                        id: 'deployer',
+                        serverId: 'R3-Artifactory',
+                        repo: 'corda-releases'
+                )
+                rtGradleRun(
+                        usesPlugin: true,
+                        useWrapper: true,
+                        switches: '-s --info -DpublishApiDocs',
+                        tasks: 'artifactoryPublish',
+                        deployerId: 'deployer',
+                        buildName: env.ARTIFACTORY_BUILD_NAME
+                )
+                rtPublishBuildInfo(
+                        serverId: 'R3-Artifactory',
+                        buildName: env.ARTIFACTORY_BUILD_NAME
+                )
+            }
+        }
+
+        stage('Publish Release Candidate to Internal Repository') {
+            when {
+                expression { isReleaseCandidate }
+            }
+            steps {
+                withCredentials([
+                        usernamePassword(credentialsId: 'docker-image-pusher-os',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD')
+                ]) {
+                    sh script: [
+                            './gradlew',
+                            COMMON_GRADLE_PARAMS,
+                            '-Pdocker.image.repository=entdocker.software.r3.com/corda',
+                            'docker:pushDockerImage',
+                            '--image OFFICIAL',
+                            '--registry-url=entdocker.software.r3.com'
+                            ].join(' ')
+                }
+            }
+        }
+
+        stage('Publish Release to Docker Hub') {
+            when {
+                expression { isReleaseTag && !isInternalRelease && !isReleaseCandidate}
+            }
+            steps {
+                withCredentials([
+                        usernamePassword(credentialsId: 'corda-publisher-docker-hub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD')
+                ]) {
+                    sh script: [
+                            './gradlew',
+                            COMMON_GRADLE_PARAMS,
+                            'docker:pushDockerImage',
+                            '-Pdocker.image.repository=corda/open-source',
+                            '--image OFFICIAL'
+                            ].join(' ')
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                findBuildScans()
+                if (gitUtils.isReleaseTag()) {
+                    gitUtils.getGitLog(env.TAG_NAME, env.GIT_URL.replace('https://github.com/corda/', ''))
+                }
+                try {
+                    if (params.DO_TEST) {
+                        unstash 'allure-input'
+                        allure includeProperties: false,
+                                jdk: '',
+                                results: [[path: '**/allure-input']]
+                    }
+                } catch (err) {
+                    echo("Allure report generation failed: $err")
+
+                    if (currentBuild.resultIsBetterOrEqualTo('SUCCESS')) {
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                }
+            }
+
+            script
+            {
+                if (!isReleaseTag) {
+                    // We want to send a summary email, but want to limit to once per day.
+                    // Comparing the dates of the previous and current builds achieves this,
+                    // i.e. we will only send an email for the first build on a given day.
+                    def prevBuildDate = new Date(
+                            currentBuild.previousBuild?.timeInMillis ?: 0).clearTime()
+                    def currentBuildDate = new Date(
+                            currentBuild.timeInMillis).clearTime()
+
+                    if (prevBuildDate != currentBuildDate) {
+                        def statusSymbol = '\u2753'
+                        switch(currentBuild.result) {
+                            case 'SUCCESS':
+                                statusSymbol = '\u2705'
+                                break;
+                            case 'UNSTABLE':
+                                statusSymbol = '\u26A0'
+                                break;
+                            case 'FAILURE':
+                                statusSymbol = '\u274c'
+                                break;
+                            default:
+                                break;
+                        }
+
+                        echo('First build for this date, sending summary email')
+                        emailext to: '$DEFAULT_RECIPIENTS',
+                            subject: "$statusSymbol" + '$BRANCH_NAME regression tests - $BUILD_STATUS',
+                            mimeType: 'text/html',
+                            body: '${SCRIPT, template="groovy-html.template"}'
+                    } else {
+                        echo('Already sent summary email today, suppressing')
+                    }
+                }
+            }
+        }
+        success {
+            script {
+                sendSlackNotifications("good", "BUILD PASSED", false, "#corda-corda4-open-source-build-notifications")
+                if (isReleaseTag || isReleaseCandidate || isReleaseBranch) {
+                    snykSecurityScan.generateHtmlElements()
+                }
+
+                if (isReleaseTag || isReleaseCandidate) {
+                    // auto import and scanning of Docker images tag is dictated by below properties, so retrieve these first to scan the approproate tag
+                    String cordaVersion = sh(script: 'grep "cordaVersion" constants.properties | awk -F= \'{print $2}\'', returnStdout: true).trim()
+                    String versionSuffix = sh(script: 'grep "versionSuffix" constants.properties | awk -F= \'{print $2}\'', returnStdout: true).trim()
+                    snykUtils.SnykApiImport(!versionSuffix.isEmpty() ? "${cordaVersion}-${versionSuffix}" : cordaVersion, SnykOrganisation.CORDA_4_OS, env.C4_OS_SNYK_ORG_ID)
+                }
+            }
+        }
+        unstable {
+            script {
+                sendSlackNotifications("warning", "BUILD UNSTABLE", false, "#corda-corda4-open-source-build-notifications")
+                if (isReleaseTag || isReleaseCandidate || isReleaseBranch) {
+                    snykSecurityScan.generateHtmlElements()
+                }
+                if (isReleaseTag || isReleaseCandidate || isReleaseBranch) {
+                    snykSecurityScan.generateHtmlElements()
+                }
+            }
+        }
+        failure {
+            script {
+                sendSlackNotifications("danger", "BUILD FAILURE", true, "#corda-corda4-open-source-build-notifications")
+                if (isReleaseTag || isReleaseBranch || isReleaseCandidate) {
+                    sendEmailNotifications("${env.EMAIL_RECIPIENTS}")
+                }
+            }
+        }
+        cleanup {
+            deleteDir() /* clean up our workspace */
+        }
+    }
+}

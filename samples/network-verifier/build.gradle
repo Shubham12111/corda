@@ -1,0 +1,72 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'net.corda.plugins.cordformation'
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+dependencies {
+    if (System.getProperty('excludeShell') == null) {
+        cordaDriver "net.corda:corda-shell:$corda_shell_version"
+    }
+
+    cordaBootstrapper "org.slf4j:slf4j-simple:$slf4j_version"
+    cordaBootstrapper project(":node-api")
+
+    // Corda integration dependencies
+    corda project(path: ":node:capsule", configuration: 'runtimeArtifacts')
+    corda project(path: ":testing:testserver:testcapsule:", configuration: 'runtimeArtifacts')
+
+    cordapp project(':samples:network-verifier:contracts')
+    cordapp project(':samples:network-verifier:workflows')
+}
+
+configurations.cordaCordapp.canBeResolved = true
+task deployNodes(type: net.corda.plugins.Cordform) {
+    def users = [['username': "default", 'password': "default", 'permissions': [ 'ALL' ]]]
+    nodeDefaults{
+        projectCordapp {
+            deploy = false
+        }
+        cordapp project(':samples:network-verifier:contracts')
+        cordapp project(':samples:network-verifier:workflows')
+        runSchemaMigration = true
+    }
+    node {
+        name "O=Notary Node,L=Zurich,C=CH"
+        notary = [validating : false,
+                  serviceLegalName: "O=Notary Service,L=Zurich,C=CH"
+        ]
+        p2pPort 10002
+        rpcSettings {
+            port 10003
+            adminPort 10004
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:20004']
+    }
+    node {
+        name "O=Bank A,L=London,C=GB"
+        p2pPort 10005
+        rpcUsers = users
+        rpcSettings {
+            port 10007
+            adminPort 10008
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:0']
+    }
+    node {
+        name "O=Bank B,L=New York,C=US"
+        p2pPort 10009
+        rpcUsers = users
+        rpcSettings {
+            port 10011
+            adminPort 10012
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:0']
+    }
+}

@@ -1,0 +1,35 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'net.corda.plugins.quasar-utils'
+
+dependencies {
+    cordaProvided project(":core")
+    cordapp project(':finance:contracts')
+    cordapp project(':finance:workflows')
+
+    cordaProvided "org.slf4j:slf4j-api:$slf4j_version"
+}
+
+jar {
+    baseName "testing-cashobservers-cordapp"
+    manifest {
+        // This JAR is part of Corda's testing framework.
+        // Driver will not include it as part of an out-of-process node.
+        attributes('Corda-Testing': true)
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+    minimumPlatformVersion 1
+    workflow {
+        name "Corda Cash Observers Test CorDapp"
+        versionId 1
+        vendor "R3"
+        licence "Open Source (Apache 2)"
+    }
+    signing {
+        enabled false
+    }
+}

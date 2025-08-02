@@ -1,0 +1,53 @@
+/**
+ * This build.gradle exists to package Node Explorer as an executable fat jar.
+ */
+apply plugin: 'us.kirchmeier.capsule'
+apply plugin: 'corda.common-publishing'
+
+description 'Node Explorer'
+
+configurations {
+    runtimeArtifacts.extendsFrom runtimeClasspath
+}
+
+capsule {
+    version capsule_version
+}
+
+configurations.runtimeOnly.canBeResolved = true
+tasks.register('buildExplorerJAR', FatCapsule) {
+    dependsOn project(':tools:explorer').tasks.jar
+    applicationClass 'net.corda.explorer.Main'
+    archiveBaseName = 'node-explorer'
+    archiveVersion = corda_release_version
+    archiveName = archiveFileName.get()
+    applicationSource = files(
+            project(':tools:explorer').configurations.runtimeClasspath,
+            project(':tools:explorer').tasks.jar,
+            project(':tools:explorer').sourceSets.main.java.outputDir.toString() + '/ExplorerCaplet.class'
+    )
+
+    capsuleManifest {
+        applicationVersion = corda_release_version
+        systemProperties['visualvm.display.name'] = 'Node Explorer'
+        minJavaVersion = '17.0'
+        caplets = ['ExplorerCaplet']
+    }
+}
+
+jar {
+    classifier "ignore"
+    enabled = true
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId 'corda-tools-explorer'
+            artifact(buildExplorerJAR) {
+                classifier ''
+            }
+            from components.java
+        }
+    }
+}

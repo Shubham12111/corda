@@ -1,0 +1,56 @@
+import net.corda.plugins.SignJar
+
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.quasar-utils'
+apply plugin: 'net.corda.plugins.cordapp'
+
+cordapp {
+    targetPlatformVersion = corda_platform_version.toInteger()
+    minimumPlatformVersion 1
+    sealing {
+        // Cannot seal JAR because other module also defines classes in the package net.corda.vega.analytics
+        enabled false
+    }
+    workflow {
+        name "net/corda/vega/flows"
+        versionId 1
+        vendor "R3"
+        licence "Open Source (Apache 2)"
+    }
+    signing {
+        enabled false
+    }
+}
+
+dependencies {
+    // The SIMM demo CorDapp depends upon Cash CorDapp features
+    cordapp project(':finance:workflows')
+    cordapp project(':finance:contracts')
+    cordapp project(':samples:simm-valuation-demo:contracts-states')
+
+    // Corda integration dependencies
+    cordaProvided project(':core')
+
+    // Cordapp dependencies
+    // Specify your cordapp's dependencies below, including dependent cordapps
+    implementation "com.opengamma.strata:strata-basics:$strata_version"
+    implementation "com.opengamma.strata:strata-product:$strata_version"
+    implementation "com.opengamma.strata:strata-data:$strata_version"
+    implementation "com.opengamma.strata:strata-calc:$strata_version"
+    implementation "com.opengamma.strata:strata-pricer:$strata_version"
+    implementation "com.opengamma.strata:strata-report:$strata_version"
+    implementation "com.opengamma.strata:strata-market:$strata_version"
+    implementation "com.opengamma.strata:strata-collect:$strata_version"
+    implementation "com.opengamma.strata:strata-loader:$strata_version"
+    implementation "com.opengamma.strata:strata-math:$strata_version"
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('sign', SignJar) {
+    inputJars jar
+}
+
+jar.finalizedBy sign

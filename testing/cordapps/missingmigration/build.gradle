@@ -1,0 +1,18 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+//apply plugin: 'net.corda.plugins.cordapp'
+//apply plugin: 'net.corda.plugins.quasar-utils'
+
+dependencies {
+    implementation project(":core")
+    implementation "javax.persistence:javax.persistence-api:2.2"
+    implementation "org.slf4j:slf4j-api:$slf4j_version"
+}
+
+jar {
+    baseName "testing-missingmigration-cordapp"
+    manifest {
+        // This JAR is part of Corda's testing framework.
+        // Driver will not include it as part of an out-of-process node.
+        attributes('Corda-Testing': true)
+    }
+}

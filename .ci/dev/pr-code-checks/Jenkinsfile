@@ -1,0 +1,71 @@
+@Library('corda-shared-build-pipeline-steps')
+import static com.r3.build.BuildControl.killAllExistingBuildsForJob
+
+killAllExistingBuildsForJob(env.JOB_NAME, env.BUILD_NUMBER.toInteger())
+
+pipeline {
+    agent { label 'standard' }
+    options {
+        timestamps()
+        timeout(time: 3, unit: 'HOURS')
+        buildDiscarder(logRotator(daysToKeepStr: '14', artifactDaysToKeepStr: '14'))
+    }
+
+    /*
+     * List environment variables in alphabetical order
+     */
+    environment {
+        SNYK_API_TOKEN = credentials('c4-os-snyk-api-token-secret')
+        C4_OS_SNYK_ORG_ID = credentials('c4-os-snyk-org-id')
+        ARTIFACTORY_CREDENTIALS = credentials('artifactory-credentials')
+        CORDA_ARTIFACTORY_PASSWORD = "${env.ARTIFACTORY_CREDENTIALS_PSW}"
+        CORDA_ARTIFACTORY_USERNAME = "${env.ARTIFACTORY_CREDENTIALS_USR}"
+        CORDA_USE_CACHE = "corda-remotes"
+        JAVA_HOME = "/usr/lib/jvm/java-17-amazon-corretto"
+    }
+
+    stages {
+        stage('Detekt check') {
+            steps {
+                authenticateGradleWrapper()
+                sh "./gradlew --no-daemon clean detekt"
+            }
+        }
+
+        stage('Compilation warnings check') {
+            steps {
+                sh "./gradlew --no-daemon -Pcompilation.warningsAsErrors=true compileAll"
+            }
+        }
+
+        stage('Snyk Delta') {
+            when {
+                expression {
+                    return CHANGE_TARGET.contains("release/os/")
+                }
+            }
+            steps {
+                snykDeltaScan(env.SNYK_API_TOKEN, env.C4_OS_SNYK_ORG_ID)
+            }
+        }
+
+        stage('No API change check') {
+            steps {
+                sh "./gradlew --no-daemon generateApi"
+                sh ".ci/check-api-changes.sh"
+            }
+        }
+
+        stage('Deploy Nodes') {
+            steps {
+                sh "./gradlew --no-daemon jar deployNodes"
+            }
+        }
+    }
+
+    post {
+        cleanup {
+            deleteDir() /* clean up our workspace */
+        }
+    }
+}

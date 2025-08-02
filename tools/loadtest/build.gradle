@@ -1,0 +1,50 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'application'
+
+mainClassName = 'net.corda.loadtest.MainKt'
+
+dependencies {
+    implementation project(':core')
+    implementation project(':node-api')
+    implementation project(':client:mock')
+    implementation project(':client:rpc')
+    implementation project(':node-driver')
+
+    implementation project(':finance:contracts')
+    implementation project(':finance:workflows')
+
+    implementation "com.jcraft:jsch:$jsch_version"
+    implementation "com.google.guava:guava:$guava_version"
+    implementation group: 'com.jcraft', name: 'jsch.agentproxy.core', version: '0.0.9'
+    implementation group: 'com.jcraft', name: 'jsch.agentproxy.sshagent', version: '0.0.9'
+    implementation group: 'com.jcraft', name: 'jsch.agentproxy.usocket-jna', version: '0.0.9'
+
+    // https://mvnrepository.com/artifact/de.danielbechler/java-object-diff
+    implementation group: 'de.danielbechler', name: 'java-object-diff', version: '0.10.2'
+
+    // TypeSafe Config: for simple and human friendly config files.
+    implementation "com.typesafe:config:$typesafe_config_version"
+}
+
+run {
+    if (project.hasProperty('loadtest-config')) {
+        args project["loadtest-config"]
+    }
+    System.properties.forEach { k, v ->
+        if (k.toString().startsWith("loadtest."))
+            systemProperty k, v
+    }
+    if (System.properties.getProperty('consoleLogLevel') != null) {
+        logging.captureStandardOutput(LogLevel.valueOf(System.properties.getProperty('consoleLogLevel')))
+        logging.captureStandardError(LogLevel.valueOf(System.properties.getProperty('consoleLogLevel')))
+        systemProperty "consoleLogLevel", System.properties.getProperty('consoleLogLevel')
+    }
+}
+
+jar {
+    manifest {
+        attributes(
+                'Automatic-Module-Name': 'net.corda.tools.loadtest'
+        )
+    }
+}

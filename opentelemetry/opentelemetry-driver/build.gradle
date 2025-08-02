@@ -1,0 +1,31 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'java-library'
+    id 'com.github.johnrengelman.shadow'
+    id 'corda.common-publishing'
+}
+
+description 'OpenTelemetry Driver'
+
+dependencies {
+    implementation project(":opentelemetry")
+}
+
+shadowJar {
+    archiveClassifier = null
+    exclude "**/Log4j2Plugins.dat"
+    zip64 true
+}
+
+jar {
+    enabled = true
+}
+
+publishing {
+    publications {
+        shadow(MavenPublication) { publication ->
+            artifactId 'corda-opentelemetry-driver'
+            artifact shadowJar
+        }
+    }
+}

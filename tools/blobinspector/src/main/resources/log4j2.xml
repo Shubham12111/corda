@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="info">
+    <Properties>
+        <Property name="console_log_level">${sys:consoleLogLevel:-error}</Property>
+        <Property name="default_log_level">${sys:defaultLogLevel:-info}</Property>
+    </Properties>
+    <Appenders>
+        <Console name="STDOUT" target="SYSTEM_OUT" ignoreExceptions="false">
+            <PatternLayout pattern="[%C{1}.%M] %m%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="${sys:consoleLogLevel}">
+            <AppenderRef ref="STDOUT"/>
+        </Root>
+    </Loggers>
+</Configuration>

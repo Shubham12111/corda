@@ -1,0 +1,78 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'idea'
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'net.corda.plugins.cordformation'
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+}
+
+jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+dependencies {
+    if (System.getProperty('excludeShell') == null) {
+        cordaDriver "net.corda:corda-shell:$corda_shell_version"
+    }
+
+    cordaBootstrapper "org.slf4j:slf4j-simple:$slf4j_version"
+    cordaBootstrapper project(":node-api")
+
+    // Corda integration dependencies
+    corda project(path: ":node:capsule", configuration: 'runtimeArtifacts')
+    corda project(path: ":testing:testserver:testcapsule:", configuration: 'runtimeArtifacts')
+
+    cordapp project(':samples:cordapp-configuration:workflows')
+}
+
+configurations.cordaCordapp.canBeResolved = true
+task deployNodes(type: net.corda.plugins.Cordform) {
+    directory file("$buildDir/nodes")
+    nodeDefaults {
+        projectCordapp {
+            deploy = false // TODO This is a bug, project cordapp should be disabled if no cordapp plugin is applied.
+        }
+        rpcUsers = [['username': "default", 'password': "default", 'permissions': [ 'ALL' ]]]
+        cordapp project(':samples:cordapp-configuration:workflows')
+        runSchemaMigration = true
+    }
+    node {
+        name "O=Notary Node,L=Zurich,C=CH"
+        notary = [validating : true,
+                  serviceLegalName: "O=Notary Service,L=Zurich,C=CH"
+        ]
+        p2pPort 10002
+        rpcSettings {
+            port 10003
+            adminPort 10004
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:10005']
+    }
+    node {
+        name "O=Bank A,L=London,C=GB"
+        p2pPort 10006
+        // This configures the default cordapp for this node
+        cordapp (project(':samples:cordapp-configuration:workflows')) {
+            config "someStringValue=test"
+        }
+        rpcSettings {
+            port 10007
+            adminPort 10008
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:10009']
+    }
+    node {
+        name "O=Bank B,L=New York,C=US"
+        p2pPort 10010
+        // This configures the default cordapp for this node
+        cordapp (project(':samples:cordapp-configuration:workflows')){
+            config project.file("src/config.conf")
+        }
+        rpcSettings {
+            port 10011
+            adminPort 10012
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:10013']
+    }
+}

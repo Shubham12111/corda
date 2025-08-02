@@ -1,0 +1,53 @@
+// This contains the SwapIdentitiesFlow which can be used for exchanging confidential identities as part of a flow.
+// TODO: Merge this into core: the original plan was to develop it independently but in practice it's too widely used to break compatibility now, as finance uses it.
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.quasar-utils'
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'corda.common-publishing'
+
+description 'Corda Experimental Confidential Identities'
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+}
+
+dependencies {
+    cordaProvided project(':core')
+
+    api "org.slf4j:slf4j-api:$slf4j_version"
+
+    testImplementation "org.jetbrains.kotlin:kotlin-test:$kotlin_version"
+    testImplementation "org.junit.jupiter:junit-jupiter-api:${junit_jupiter_version}"
+    testImplementation "co.paralleluniverse:quasar-core:$quasar_version"
+    testImplementation "junit:junit:$junit_version"
+
+    testRuntimeOnly "org.junit.vintage:junit-vintage-engine:${junit_vintage_version}"
+    testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:${junit_jupiter_version}"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher:${junit_platform_version}"
+
+    // Guava: Google test library (collections test suite)
+    testImplementation "com.google.guava:guava-testlib:$guava_version"
+
+    // Bring in the MockNode infrastructure for writing protocol unit tests.
+    testImplementation project(":node")
+    testImplementation project(":node-api")
+    testImplementation project(":node-driver")
+    testImplementation project(":core-test-utils")
+    testImplementation project(':finance:contracts')
+    testImplementation project(':finance:workflows')
+
+    // AssertJ: for fluent assertions for testing
+    testImplementation "org.assertj:assertj-core:$assertj_version"
+    testImplementation "com.natpryce:hamkrest:$hamkrest_version"
+    testImplementation "io.reactivex:rxjava:$rxjava_version"
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId 'corda-confidential-identities'
+            from components.cordapp
+            artifact javadocJar
+        }
+    }
+}

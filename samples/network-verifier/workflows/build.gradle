@@ -1,0 +1,29 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.cordapp'
+
+description 'Corda Network Verifier - Workflows'
+
+dependencies {
+    cordaProvided project(':core')
+    cordapp project(':samples:network-verifier:contracts')
+
+    implementation "co.paralleluniverse:quasar-core:$quasar_version"
+
+    testImplementation project(":core-test-utils")
+    testImplementation "junit:junit:$junit_version"
+}
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+    minimumPlatformVersion 1
+    workflow {
+        name "Corda Network Verifier"
+        versionId 1
+        vendor "R3"
+        licence "Open Source (Apache 2)"
+    }
+}
+
+jar {
+    baseName 'corda-network-verifier-workflows'
+}

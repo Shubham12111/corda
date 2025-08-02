@@ -1,0 +1,51 @@
+import org.apache.tools.ant.filters.ReplaceTokens
+
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'corda.common-publishing'
+
+description 'Corda common-logging module'
+
+dependencies {
+    implementation group: "org.jetbrains.kotlin", name: "kotlin-reflect", version: kotlin_version
+
+    implementation group: "com.typesafe", name: "config", version: typesafe_config_version
+
+    // Log4J: logging framework
+    implementation "org.apache.logging.log4j:log4j-core:$log4j_version"
+
+    implementation "com.jcabi:jcabi-manifests:$jcabi_manifests_version"
+
+    // Need to depend on one other Corda project in order to get hold of a valid manifest for the tests
+    testImplementation project(":common-validation")
+
+    // test dependencies
+    testImplementation "junit:junit:$junit_version"
+    testImplementation group: "org.jetbrains.kotlin", name: "kotlin-test", version: kotlin_version
+    testImplementation "org.mockito:mockito-core:$mockito_version"
+    testImplementation "com.natpryce:hamkrest:$hamkrest_version"
+}
+
+
+
+task generateSource(type: Copy) {
+    from 'src/main/template'
+    filter(ReplaceTokens, tokens: [corda_release_version: corda_release_version])
+    into 'src/main'
+}
+compileKotlin.dependsOn generateSource
+processResources.dependsOn generateSource
+sourcesJar.dependsOn generateSource
+
+jar {
+    baseName 'corda-common-logging'
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId jar.baseName
+            from components.java
+        }
+    }
+}
+

@@ -1,0 +1,25 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+//apply plugin: 'net.corda.plugins.cordapp'
+//apply plugin: 'net.corda.plugins.quasar-utils'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven { url "$publicArtifactURL/corda-dependencies" }
+    maven { url "$publicArtifactURL/corda" }
+}
+
+dependencies {
+    implementation project(":core")
+
+    api "javax.persistence:javax.persistence-api:2.2"
+}
+
+jar {
+    baseName "testing-dbfailure-contracts"
+    manifest {
+        // This JAR is part of Corda's testing framework.
+        // Driver will not include it as part of an out-of-process node.
+        attributes('Corda-Testing': true)
+    }
+}

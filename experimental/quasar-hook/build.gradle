@@ -1,0 +1,26 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'idea'
+
+description 'A javaagent to allow hooking into the instrumentation by Quasar'
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
+    implementation "org.javassist:javassist:$javaassist_version"
+}
+
+configurations.implementation.canBeResolved = true
+jar {
+    archiveName = "${project.name}.jar"
+    manifest {
+        attributes(
+                'Premain-Class': 'net.corda.quasarhook.QuasarInstrumentationHookAgent',
+                'Can-Redefine-Classes': 'true',
+                'Can-Retransform-Classes': 'true',
+                'Can-Set-Native-Method-Prefix': 'true',
+                'Implementation-Title': "QuasarHook",
+                'Implementation-Version': rootProject.version
+        )
+    }
+    from { configurations.implementation.collect { it.isDirectory() ? it : zipTree(it) } }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

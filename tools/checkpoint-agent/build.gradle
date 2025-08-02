@@ -1,0 +1,41 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'idea'
+apply plugin: 'corda.common-publishing'
+
+description 'A javaagent to allow hooking into Kryo checkpoints'
+
+dependencies {
+    implementation "org.javassist:javassist:$javaassist_version"
+    compileOnly "com.esotericsoftware:kryo:$kryo_version"
+    compileOnly "co.paralleluniverse:quasar-core:$quasar_version"
+
+    compileOnly (project(':core')) {
+        transitive = true
+    }
+}
+
+configurations.implementation.canBeResolved = true
+jar {
+    archiveBaseName = "${project.name}"
+    manifest {
+        attributes(
+                'Premain-Class': 'net.corda.tools.CheckpointAgent',
+                'Can-Redefine-Classes': 'true',
+                'Can-Retransform-Classes': 'true',
+                'Can-Set-Native-Method-Prefix': 'true',
+                'Implementation-Title': "CheckpointAgent",
+                'Implementation-Version': rootProject.version
+        )
+    }
+    from { configurations.implementation.collect { it.isDirectory() ? it : zipTree(it) } }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifactId 'corda-tools-checkpoint-agent'
+            from components.java
+        }
+    }
+}

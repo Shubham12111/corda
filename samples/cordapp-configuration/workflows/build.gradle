@@ -1,0 +1,18 @@
+apply plugin: 'org.jetbrains.kotlin.jvm'
+apply plugin: 'net.corda.plugins.cordapp'
+
+dependencies {
+    cordaProvided project(':core')
+    implementation "co.paralleluniverse:quasar-core:$quasar_version"
+}
+
+cordapp {
+    targetPlatformVersion corda_platform_version.toInteger()
+    minimumPlatformVersion 1
+    workflow {
+        name "Cordapp Configuration Sample"
+        versionId 1
+        vendor "R3"
+        licence "Open Source (Apache 2)"
+    }
+}
